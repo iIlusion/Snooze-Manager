@@ -26,7 +26,6 @@ let isHideUnownedEnabled = false;
 
 // Shared Cache
 let skinsCache = new Map(); // skinId → skin object
-let skinTileIndex = {};     // tile filename → skinId
 let emberHookRegistered = false;
 
 // Loot Diffing State
@@ -40,17 +39,12 @@ const tabData = {
     emotes: { loaded: false, items: [], cardMap: new Map(), activeFilter: 'all', fetcher: fetchUnownedEmotes, subtitle: "Rerollable Emotes you don't own yet" }
 };
 
-// Champ Select State
-let currentChampId = null;
-let sessionUnsub = null;
-
 // Styles
 function injectStyles() {
     if (document.getElementById(STYLE_ID)) return;
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-        
         /* -- LOOT BUTTON & PANEL -- */
         #${BTN_ID} {
             display: flex; align-items: center; justify-content: center;
@@ -131,7 +125,7 @@ function injectStyles() {
 
         #sm-whale-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 
-                .sm-whale-card { 
+        .sm-whale-card { 
             position: relative; border-radius: 6px; overflow: hidden; 
             border: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.02); 
             transition: border-color 0.2s, transform 0.15s; 
@@ -210,16 +204,6 @@ async function loadSkinsCache() {
         const processSkin = (skin) => {
             if (skin?.id === undefined) return;
             skinsCache.set(Number(skin.id), skin);
-            
-            // Build tile index for SkinTierDisplay
-            if (skin.tilePath) {
-                const key = skin.tilePath.split('/').pop().toLowerCase();
-                if (key && !skinTileIndex[key]) { 
-                    skinTileIndex[key] = skin.id; 
-                } else if (key && skin.id < skinTileIndex[key]) {
-                    skinTileIndex[key] = skin.id;
-                }
-            }
         };
 
         if (Array.isArray(data)) {
@@ -241,7 +225,7 @@ async function loadSkinsCache() {
                 }
             });
         }
-        Utils.Debug.log(`[WhaleHelper] Cached ${skinsCache.size} skins and built tile index.`);
+        Utils.Debug.log(`[WhaleHelper] Cached ${skinsCache.size} skins.`);
     } catch (err) {
         Utils.Debug.error('[WhaleHelper] Failed to load skins cache:', err);
     }
@@ -314,67 +298,33 @@ function updateBadge(nameContainer, skinId) {
     else root.appendChild(badge);
 }
 
-function refreshAllBadges() {
-    document.querySelectorAll('.champion-skin-name').forEach(nameEl => {
-        const skinSelectEl = nameEl.closest('.skin-select');
-        updateBadge(nameEl, extractSkinIdFromDOM(skinSelectEl));
-    });
-}
-
-function extractSkinIdFromDOM(skinSelectEl) {
-    const container = skinSelectEl ?? document.querySelector('.skin-select');
-    if (!container) return null;
-
-    const viewedTile = container.querySelector('.skin-carousel-offset-2 .skin-selection-thumbnail');
-    if (!viewedTile) return null;
-
-    const bg = viewedTile.style.backgroundImage;
-    if (!bg) return null;
-
-    const rawUrl = bg.replace(/^url\(["']?|["']?\)$/g, '');
-    let filename = rawUrl.split('/').pop().toLowerCase();
-    filename = filename.replace(/\.skins_[^.]+\.jpg$/i, '.jpg');
-
-    if (filename && skinTileIndex[filename]) return skinTileIndex[filename];
-
-    const slotMatch = rawUrl.match(/\/Skins\/Skin(\d+)\//i);
-    if (slotMatch && currentChampId > 0) return currentChampId * 1000 + parseInt(slotMatch[1], 10);
-    if (/\/Skins\/Base\//i.test(rawUrl) && currentChampId > 0) return currentChampId * 1000;
-
-    return null;
+function getComponentFromElement(element) {
+    const globalEmber = window.Ember || window.__SM_EMBER_INSTANCE;
+    if (!globalEmber || !element || !element.id) return null;
+    return globalEmber.View?.views?.[element.id] || null;
 }
 
 function extractSkinIdFromComponent(component) {
-    const candidates = [
-        () => component.skin?.id, () => component.selectedSkin?.id, () => component.currentSkin?.id,
-        () => component.model?.selectedSkinId, () => component.model?.skin?.id, () => component.skinId,
-        () => component.selectedSkinId, () => component.get?.('skin.id'), () => component.get?.('selectedSkin.id'),
-        () => component.get?.('skinId'), () => component.get?.('selectedSkinId'),
-    ];
-    for (const fn of candidates) {
-        try { const v = fn(); if (v != null && v > 0) return v; } catch (_) {}
+    if (!component) return null;
+    try {
+        return component.get?.('viewSkin.id') 
+            || component.get?.('skin.id') 
+            || component.get?.('selectedSkinId')
+            || component.get?.('skinId')
+            || component.skin?.id 
+            || component.selectedSkin?.id;
+    } catch (e) {
+        return null;
     }
-    return null;
 }
 
-function handleSession(session) {
-    if (!session) return;
-    const localCell = session.localPlayerCellId;
-    const local = (session.myTeam || []).find(p => p.cellId === localCell);
-    if (!local) return;
-    const champId = local.championId || local.championPickIntent || 0;
-    if (champId !== currentChampId) currentChampId = champId;
-}
-
-function mountSessionObserver() {
-    if (sessionUnsub) return;
-    sessionUnsub = Utils.LCU.observe('/lol-champ-select/v1/session', event => handleSession(event?.data));
-    Utils.LCU.get('/lol-champ-select/v1/session').then(handleSession).catch(() => {});
-}
-
-function unmountSessionObserver() {
-    if (sessionUnsub) { sessionUnsub(); sessionUnsub = null; }
-    currentChampId = null;
+function refreshAllBadges() {
+    document.querySelectorAll('.champion-skin-name').forEach(nameEl => {
+        const comp = getComponentFromElement(nameEl);
+        if (comp) {
+            updateBadge(nameEl, extractSkinIdFromComponent(comp));
+        }
+    });
 }
 
 // LOOT WHALE HELPER
@@ -905,7 +855,7 @@ function injectButton(actionTabsContainer) {
     btn.id = BTN_ID; btn.setAttribute(BTN_ATTR, 'true'); btn.title = 'Whale Helper — skins you don\'t own yet';
 
     btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="-5.0 -10.0 110.0 135.0">
-	 <path d="m93.117 34.301c-0.14453-0.89453-0.85547-1.5859-1.7539-1.7031-0.89844-0.11719-1.7617 0.37109-2.1289 1.1992-0.82422 1.8594-2.5234 2.2031-5.4492 2.6602-2.7617 0.14453-5.3984 1.2148-7.4805 3.0391-1.6914-1.9023-3.8398-3.3438-6.2461-4.1875-2.2305-0.69531-4.1367-2.1758-5.3633-4.1641-0.54297-0.83203-1.5234-1.2578-2.5-1.0898-0.99609 0.16797-1.7891 0.91406-2.0234 1.8906-1.0391 4.3945-1.5508 9.5117 2.5469 14.152v0.003906c2.0859 2.2344 4.6094 4.0156 7.4141 5.2383 0.21094 0.085937 0.32813 0.32031 0.26953 0.54297-0.066406 0.28125-0.17969 0.54688-0.33594 0.79297-1.1797 1.4453-3 2.207-4.8594 2.0352-1.9336-0.17578-3.0977-1.7109-5.1562-4.6445-0.76562-1.0898-1.6328-2.3281-2.6641-3.5742-4.3789-5.2969-10.156-9.2617-16.676-11.445-2.4922-0.77344-15.43-4.1992-25.336 4.4336-6.1797 5.5586-9.4023 13.691-8.6992 21.973 0.10547 1.1562 0.29688 2.3047 0.57031 3.4336 0.015625 0.074219 0.03125 0.14844 0.054687 0.21875 0.98047 4.6328 3.7695 8.6797 7.75 11.246 4.0352 2.2773 8.4141 3.875 12.965 4.7305 3.0273 3.7695 7.6445 5.9141 12.477 5.7852h0.023437c1.0469 0.007812 2-0.61328 2.4141-1.5781 0.41406-0.96484 0.20703-2.082-0.51953-2.8359 1.3945-0.019531 2.7852-0.082031 4.1602-0.19922 3.6641 1.7031 7.668 2.5469 11.703 2.4688h0.10937c1.0273 0 1.9453-0.63672 2.3086-1.5938 0.37891-0.97656 0.11328-2.082-0.66406-2.7812-0.26172-0.23828-0.49219-0.47656-0.71094-0.71484 5.7383-1.8398 10.832-5.2852 14.672-9.9297 1.543-1.9609 2.8164-4.1211 3.7852-6.418 0.011718-0.019531 0.015624-0.039062 0.027343-0.058594h-0.003906c1.4297-3.4297 2.293-7.0664 2.5586-10.77 0.03125-0.37109 0.29688-0.67969 0.66016-0.75781 3.3359-0.61328 6.4688-2.0508 9.1055-4.1836 3.8086-3.7539 3.5117-9.8906 2.9961-13.215zm-59.426 47.715c1.5781 0.18359 3.1758 0.30469 4.7812 0.375 0.25781 0.45312 0.54688 0.89062 0.86719 1.3008-1.9805-0.14062-3.9102-0.71094-5.6484-1.6758zm-4.4883-3.8516-0.011719-0.003906c-4.3945-0.77734-8.6289-2.2891-12.52-4.4766v-0.003906c-2.5273-1.5938-4.4688-3.9609-5.5352-6.75 2.7344 0.79297 5.5703 1.1914 8.4219 1.1875 3.3477-0.011719 6.6719-0.53516 9.8594-1.5625 0.70703 0.12109 1.4062 0.28125 2.0977 0.47656 2.0625 0.60938 4 1.582 5.7148 2.875 0.52734 3.6328 2.3008 6.9648 5.0156 9.4336-4.3789 0.0625-8.75-0.33203-13.043-1.1758zm28.324-1.2305c-0.26172-0.53125-0.50781-1.082-0.76953-1.6758-0.22656-0.50781-0.46094-1.0352-0.71875-1.5742 0.57813-0.125 1.168-0.25781 1.7852-0.39453 4.8281-1.0977 9.4531-2.957 13.699-5.5078-3.6641 4.3633-8.5312 7.5469-13.996 9.1523zm30.398-31.645c-2.2266 1.7148-4.8359 2.8672-7.6016 3.3633-1.7031 0.37891-2.957 1.8281-3.082 3.5703-0.22656 3.1953-0.94141 6.3359-2.1172 9.3125-5.2734 4.2148-11.422 7.1914-18 8.7109-0.94141 0.21094-1.8242 0.40234-2.6797 0.58203-1.0508-1.5898-2.2969-3.043-3.707-4.3281-0.30078-0.28125-0.70703-0.42969-1.1211-0.41406-0.41406 0.015624-0.80469 0.19531-1.0859 0.5-0.28125 0.30078-0.42969 0.70703-0.41406 1.1211 0.015624 0.41406 0.19531 0.80469 0.5 1.0859 2.3359 2.1328 4.1445 4.7773 5.2812 7.7305 0.46875 1.1133 1.0195 2.1953 1.6406 3.2344 0.015626 0.019532 0.023438 0.046876 0.042969 0.066407h-0.003906c0.375 0.61328 0.79688 1.1914 1.2617 1.7344-7.5156-0.40234-15.871-3.9961-16.66-13.125-0.066407-0.83594-0.78516-1.4648-1.625-1.4141-1.3633-0.96484-2.8398-1.7617-4.3945-2.375 0.49219-0.24219 0.98047-0.49609 1.4609-0.75781h-0.003906c0.75781-0.41797 1.0312-1.3711 0.61328-2.125-0.41797-0.75391-1.3711-1.0273-2.125-0.60938-0.94922 0.52344-1.9258 1-2.9258 1.4258-4.8203 2.082-10.113 2.832-15.324 2.1641-1.9727-0.27344-3.9062-0.75391-5.7734-1.4375-0.13281-0.69922-0.23047-1.4102-0.29297-2.1211-0.625-7.2891 2.2031-14.449 7.6406-19.348 8.6523-7.5391 20.141-4.4922 22.355-3.8047 5.9297 2.0156 11.188 5.6328 15.191 10.449 0.94922 1.1523 1.7461 2.2852 2.5156 3.3828 2.1289 3.0312 3.9648 5.6484 7.4375 5.9609 2.9883 0.29297 5.9102-0.98828 7.7148-3.3867 0.36328-0.53906 0.625-1.1406 0.78125-1.7695 0.45312-1.7148-0.42188-3.5039-2.0547-4.1992-2.3828-1.0352-4.5312-2.543-6.3125-4.4375-2.3125-2.6172-2.9648-5.5781-2.1406-10h0.003906c1.543 1.9258 3.6055 3.3711 5.9414 4.1641 2.5391 0.85547 4.7227 2.5352 6.2031 4.7734 0.3125 0.43359 0.82422 0.68359 1.3633 0.66016 0.53516-0.03125 1.0195-0.33594 1.2812-0.80859 1.3633-2.4727 3.7656-2.8438 6.5508-3.2773v0.003906c2.1602-0.14062 4.2383-0.85547 6.0273-2.0664 0.085938 2.6328-0.32422 5.8008-2.3633 7.8086z"/>
+	 <path d="m93.117 34.301c-0.14453-0.89453-0.85547-1.5859-1.7539-1.7031-0.89844-0.11719-1.7617 0.37109-2.1289 1.1992-0.82422 1.8594-2.5234 2.2031-5.4492 2.6602-2.7617 0.14453-5.3984 1.2148-7.4805 3.0391-1.6914-1.9023-3.8398-3.3438-6.2461-4.1875-2.2305-0.69531-4.1367-2.1758-5.3633-4.1641-0.54297-0.83203-1.5234-1.2578-2.5-1.0898-0.99609 0.16797-1.7891 0.91406-2.0234 1.8906-1.0391 4.3945-1.5508 9.5117 2.5469 14.152v0.003906c2.0859 2.2344 4.6094 4.0156 7.4141 5.2383 0.21094 0.085937 0.32813 0.32031 0.26953 0.54297-0.066406 0.28125-0.17969 0.54688-0.33594 0.79297-1.1797 1.4453-3 2.207-4.8594 2.0352-1.9336-0.17578-3.0977-1.7109-5.1562-4.6445-0.76562-1.0898-1.6328-2.3281-2.6641-3.5742-4.3789-5.2969-10.156-9.2617-16.676-11.445-2.4922-0.77344-15.43-4.1992-25.336 4.4336-6.1797 5.5586-9.4023 13.691-8.6992 21.973 0.10547 1.1562 0.29688 2.3047 0.57031 3.4336 0.015625 0.074219 0.03125 0.14844 0.054687 0.21875 0.98047 4.6328 3.7695 8.6797 7.75 11.246 4.0352 2.2773 8.4141 3.875 12.965 4.7305 3.0273 3.7695 7.6445 5.9141 12.477 5.7852h0.023437c1.0469 0.007812 2-0.61328 2.4141-1.5781 0.41406-0.96484 0.20703-2.082-0.51953-2.8359 1.3945-0.019531 2.7852-0.082031 4.1602-0.19922 3.6641 1.7031 7.668 2.5469 11.703 2.4688h0.10937c1.0273 0 1.9453-0.63672 2.3086-1.5938 0.37891-0.97656 0.11328-2.082-0.66406-2.7812-0.26172-0.23828-0.49219-0.47656-0.71094-0.71484 5.7383-1.8398 10.832-5.2852 14.672-9.9297 1.543-1.9609 2.8164-4.1211 3.7852-6.418 0.011718-0.019531 0.015624-0.039062 0.027343-0.058594h-0.003906c1.4297-3.4297 2.293-7.0664 2.5586-10.77 0.03125-0.37109 0.29688-0.67969 0.66016-0.75781 3.3359-0.61328 6.4688-2.0508 9.1055-4.1836 3.8086-3.7539 3.5117-9.8906 2.9961-13.215zm-59.426 47.715c1.5781 0.18359 3.1758 0.30469 4.7812 0.375 0.25781 0.45312 0.54688 0.89062 0.86719 1.3008-1.9805-0.14062-3.9102-0.71094-5.6484-1.6758zm-4.4883-3.8516-0.011719-0.003906c-4.3945-0.77734-8.6289-2.2891-12.52-4.4766v-0.003906c-2.5273-1.5938-4.4688-3.9609-5.5352-6.75 2.7344 0.79297 5.5703 1.1914 8.4219 1.1875 3.3477-0.011719 6.6719-0.53516 9.8594-1.5625 0.70703 0.12109 1.4062 0.28125 2.0977 0.47656 2.0625 0.60938 4 1.582 5.7148 2.875 0.52734 3.6328 2.3008 6.9648 5.0156 9.4336-4.3789 0.0625-8.75-0.33203-13.043-1.1758zm28.324-1.2305c-0.26172-0.53125-0.50781-1.082-0.76953-1.6758-0.22656-0.50781-0.46094-1.0352-0.71875-1.5742 0.57813-0.125 1.168-0.25781 1.7852-0.39453 4.8281-1.0977 9.4531-2.957 13.699-5.5078-3.6641 4.3633-8.5312 7.5469-13.996 9.1523zm30.398-31.645c-2.2266 1.7148-4.8359 2.8672-7.6016 3.3633-1.7031 0.37891-2.957 1.8281-3.082 3.5703-0.22656 3.1953-0.94141 6.3359-2.1172 9.3125-5.2734 4.2148-11.422 7.1914-18 8.7109-0.94141 0.21094-1.8242 0.40234-2.6797 0.58203-1.0508-1.5898-2.2969-3.043-3.707-4.3281-0.30078-0.28125-0.70703-0.42969-1.1211-0.41406-0.41406 0.015624-0.80469 0.19531-1.0859 0.5-0.28125 0.30078-0.42969 0.70703-0.41406 1.1211 0.015624 0.41406 0.19531 0.80469 0.5 1.0859 2.3359 2.1328 4.1445 4.7773 5.2812 7.7305 0.46875 1.1133 1.7461 2.2852 2.5156 3.3828 2.1289 3.0312 3.9648 5.6484 7.4375 5.9609 2.9883 0.29297 5.9102-0.98828 7.7148-3.3867 0.36328-0.53906 0.625-1.1406 0.78125-1.7695 0.45312-1.7148-0.42188-3.5039-2.0547-4.1992-2.3828-1.0352-4.5312-2.543-6.3125-4.4375-2.3125-2.6172-2.9648-5.5781-2.1406-10h0.003906c1.543 1.9258 3.6055 3.3711 5.9414 4.1641 2.5391 0.85547 4.7227 2.5352 6.2031 4.7734 0.3125 0.43359 0.82422 0.68359 1.3633 0.66016 0.53516-0.03125 1.0195-0.33594 1.2812-0.80859 1.3633-2.4727 3.7656-2.8438 6.5508-3.2773v0.003906c2.1602-0.14062 4.2383-0.85547 6.0273-2.0664 0.085938 2.6328-0.32422 5.8008-2.3633 7.8086z"/>
 	 <path d="m32.402 57.078c0 2.6055-3.9062 2.6055-3.9062 0s3.9062-2.6055 3.9062 0"/>
 	 <path d="m29.414 22.188c0.33594 0.042969 0.66406 0.125 0.98047 0.24219 0.47656 0.19141 1.1602 0.62891 2.2539 2.3242 0.79297 1.3008 1.3789 2.7188 1.7383 4.1992 0.19531 0.66406 0.80469 1.1211 1.4961 1.1211 0.042969 0 0.082032 0 0.125-0.003907 0.0625-0.011718 0.125-0.027343 0.18359-0.046874 0.058594 0.019531 0.12109 0.035156 0.18359 0.046874 0.042969 0.003907 0.082031 0.003907 0.125 0.003907 0.69141 0 1.3008-0.45703 1.4961-1.1211 0.35938-1.4805 0.94531-2.8984 1.7383-4.1992 1.0898-1.6953 1.7773-2.1328 2.25-2.3242 0.32031-0.11719 0.65234-0.19922 0.98828-0.24219 0.89453-0.078125 1.7383-0.46094 2.3867-1.0859 1.3047-1.2773 1.6211-3.2578 0.78125-4.8789-0.96875-2.0352-3.0977-3.2539-5.3438-3.0664-2.0391 0.28125-3.7891 1.6094-4.6055 3.5039-0.81641-1.8945-2.5664-3.2227-4.6055-3.5039-2.2461-0.18359-4.3711 1.0391-5.3438 3.0664-0.83984 1.6211-0.52344 3.6016 0.78125 4.8789 0.64844 0.625 1.4922 1.0078 2.3906 1.0859zm8.6797-1.7461c0.63672-2.5234 1.7383-4.0469 3.0156-4.1758 0.058594-0.003906 0.11719-0.007813 0.17578-0.007813h0.003906c0.86328 0.042969 1.6406 0.54297 2.0312 1.3164 0.26953 0.42969 0.19141 0.99219-0.1875 1.3359-0.082031 0.082032-0.15234 0.10938-0.67187 0.19531-0.5625 0.078125-1.1133 0.21875-1.6445 0.42578-1.1992 0.53516-2.2305 1.3906-2.9727 2.4727 0.042969-0.52734 0.12891-1.0469 0.25-1.5625zm-9.0312-2.8672c0.39062-0.77344 1.168-1.2734 2.0352-1.3164 0.058594 0 0.11719 0.003907 0.17578 0.007813 1.2812 0.12891 2.3789 1.6484 3.0156 4.1758 0.12109 0.51562 0.20703 1.0352 0.25 1.5625-0.74219-1.082-1.7734-1.9375-2.9727-2.4727-0.53125-0.20703-1.082-0.35156-1.6445-0.42578-0.51953-0.085938-0.59375-0.11328-0.67188-0.19531-0.37891-0.34375-0.45703-0.90625-0.1875-1.3359z"/>
 	</svg>`;
@@ -1470,7 +1420,7 @@ function installContextMenuInterceptors() {
         return text;
     };
 
-    // Intercept both Fetch and XHR requests for context menu options
+    // Intercept requests for context menu options
     Utils.Hooks.Fetch.hookRes(pattern, handleResponse);
     Utils.Hooks.Xhr.hookRes(pattern, (method, url, xhr, responseText) => {
         return handleResponse(responseText);
@@ -1528,18 +1478,28 @@ export function installEmberHook() {
         matcher: 'champion-skin-name',
         mixin() {
             return {
-                didRender() {
-                    this._super(...arguments);
-                    if (!isSkinTierEnabled || !this.element) return;
-                    const skinId = extractSkinIdFromComponent(this) || extractSkinIdFromDOM(this.element.closest('.skin-select'));
-                    updateBadge(this.element, skinId);
+                didInsertElement() {
+                    if (typeof this._super === 'function') {
+                        this._super(...arguments);
+                    }
+                    this.addObserver('viewSkin', this, this.onSkinIdChange);
+                    this.addObserver('skin', this, this.onSkinIdChange);
+                    this.addObserver('selectedSkinId', this, this.onSkinIdChange);
+                    this.onSkinIdChange();
                 },
-                didUpdate() {
-                    this._super(...arguments);
-                    if (!isSkinTierEnabled || !this.element) return;
-                    const skinId = extractSkinIdFromComponent(this) || extractSkinIdFromDOM(this.element.closest('.skin-select'));
-                    updateBadge(this.element, skinId);
+                willDestroyElement() {
+                    this.removeObserver('viewSkin', this, this.onSkinIdChange);
+                    this.removeObserver('skin', this, this.onSkinIdChange);
+                    this.removeObserver('selectedSkinId', this, this.onSkinIdChange);
+                    if (typeof this._super === 'function') {
+                        this._super(...arguments);
+                    }
                 },
+                onSkinIdChange() {
+                    if (!isSkinTierEnabled || !this.element) return;
+                    const skinId = extractSkinIdFromComponent(this);
+                    updateBadge(this.element, skinId);
+                }
             };
         }
     });
@@ -1552,7 +1512,7 @@ export function installEmberHook() {
                 name: 'handleSkinCarouselSkins',
                 replacement: function(original, args) {
                     if (isHideUnownedEnabled && args && args[0] && Array.isArray(args[0])) {
-                        // Filter skins natively
+                        // Filter unlocked skins
                         args[0] = args[0].filter(skin => {
                             if (!skin.unlocked && !skin.isBase && (!skin.id || skin.id % 1000 !== 0)) {
                                 return false;

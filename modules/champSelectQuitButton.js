@@ -53,7 +53,7 @@ export function init(context) {
         matcher: 'champion-select',
         mixin() {
             return {
-                didRender() {
+                didInsertElement() {
                     this._super(...arguments);
                     if (!Utils.Store.get('champSelectQuitButton', 'enabled')) return;
                     if (!this.element) return;

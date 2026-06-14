@@ -1,102 +1,74 @@
 /**
  * @name Snooze-ARAMNoCD
- * @version 1.0.0
+ * @version 1.0.1
  * @author SnoozeFest - github@ReformedDoge
- * @description Removes ARAM bench cooldown visuals and enables instant bench swaps.
+ * @description Removes ARAM bench cooldowns.
  * @link https://github.com/ReformedDoge
  */
 import Utils from './generalUtils.js';
 
-
 let isEnabled = false;
-let benchContainerUnsub = null;
-let aramPhaseUnsub = null;
 
 function toggleFeature(enabled) {
     isEnabled = enabled;
     Utils.Store.set('aramNocd', 'enabled', enabled);
-    if (enabled) mountAramNocd();
-    else unmountAramNocd();
 }
 
-function extractChampionId(item) {
-    if (!item) return null;
-    const match = item.outerHTML.match(/champion-icons\/(\d+)\.png/);
-    return match ? Number(match[1]) : null;
+function makeComputedOverride(Ember, valueToForce) {
+    const version = Ember.VERSION ? parseFloat(Ember.VERSION) : 1.0;
+    if (version >= 1.12) {
+        return Ember.computed({
+            get() {
+                return isEnabled ? valueToForce : false;
+            },
+            set(key, value) {
+                return isEnabled ? valueToForce : value;
+            }
+        });
+    } else {
+        return Ember.computed(function(key, value) {
+            if (arguments.length > 1) {
+                return isEnabled ? valueToForce : value;
+            }
+            return isEnabled ? valueToForce : false;
+        });
+    }
 }
 
-async function doBenchSwap(championId) {
-    try {
-        await Utils.LCU.post(`/lol-champ-select/v1/session/bench/swap/${championId}`);
-    } catch (err) {}
-}
-
-/**
- * Targeted bench Utils.DOM.observer:
- * - Watches .bench-container for mutations 
- * - Removes cooldown classes and hides masks 
- * - Adds click hijack handlers on bench items 
- */
-let benchObserver = null;
-let benchProcessScheduled = false;
-
-function startBenchObserver() {
-    const container = document.querySelector('.bench-container');
-    if (!container) return; // Container not in DOM yet — SmartObserver will call when it appears
-    if (benchObserver) return; // Already actively watching
-
-    const process = () => {
-        benchProcessScheduled = false;
-        if (!isEnabled || !document.body.contains(container)) {
-            stopBenchObserver();
+// Common mixin definition
+const getCooldownMixin = (Ember) => ({
+    init() {
+        if (typeof this._super === 'function') {
+            this._super(...arguments);
+        }
+        if (isEnabled) {
+            this.set('onCooldownFromAllySwap', false);
+            this.set('showCooldownAnimation2', false);
+            this.set('showCooldownAnimation3', false);
+            this.set('benchSwapOnCooldown', false);
+            this.set('benchSoundOnCooldown', false);
+            this.set('pendingRequest', false);
+        }
+    },
+    _triggerCooldownAnimation() {
+        if (isEnabled) {
+            this.set('onCooldownFromAllySwap', false);
+            this.set('showCooldownAnimation2', false);
+            this.set('showCooldownAnimation3', false);
             return;
         }
-
-        // Remove cooldown classes and hide masks
-        container.querySelectorAll('[class*="on-cooldown"]').forEach((el) => {
-            const toRemove = Array.from(el.classList).filter((cls) => cls.startsWith('on-cooldown'));
-            toRemove.forEach((cls) => el.classList.remove(cls));
-            const mask = el.querySelector('.cooldown-mask');
-            if (mask instanceof HTMLElement) mask.style.display = 'none';
-        });
-
-        // Add click hijack once per item
-        const BENCH_HIJACK_ATTR = 'data-aram-nocd-hijacked';
-        container.querySelectorAll(`.champion-bench-item:not([${BENCH_HIJACK_ATTR}])`).forEach((item) => {
-            if (item.classList.contains('empty-bench-item') || item.classList.contains('locked-out')) return;
-            item.setAttribute(BENCH_HIJACK_ATTR, 'true');
-            item.addEventListener('click', (e) => {
-                if (!isEnabled) return;
-                const championId = extractChampionId(item);
-                if (!championId) return;
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-                e.preventDefault();
-                doBenchSwap(championId);
-            }, true);
-        });
-    };
-
-    const scheduleProcess = () => {
-        if (benchProcessScheduled) return;
-        benchProcessScheduled = true;
-        requestAnimationFrame(process);
-    };
-
-    // Observer that watches .bench-container
-    benchObserver = new MutationObserver(scheduleProcess);
-    benchObserver.observe(container, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-    // Run immediately for existing elements
-    process();
-}
-
-function stopBenchObserver() {
-    if (benchObserver) {
-        benchObserver.disconnect();
-        benchObserver = null;
-    }
-    benchProcessScheduled = false;
-}
+        if (typeof this._super === 'function') {
+            return this._super(...arguments);
+        }
+    },
+    // Force active state block properties to false
+    onCooldownFromAllySwap: makeComputedOverride(Ember, false),
+    showCooldownAnimation2: makeComputedOverride(Ember, false),
+    showCooldownAnimation3: makeComputedOverride(Ember, false),
+    benchSwapOnCooldown: makeComputedOverride(Ember, false),
+    benchSoundOnCooldown: makeComputedOverride(Ember, false),
+    pendingRequest: makeComputedOverride(Ember, false)
+});
 
 export function init(context) {
     Utils.Settings.inject(context, {
@@ -110,11 +82,53 @@ export function init(context) {
 
     isEnabled = Utils.Store.get('aramNocd', 'enabled') || false;
 
+    // Hook the parent bench container
+    Utils.Hooks.Ember.registerRule({
+        name: 'aram-nocd-bench-hook',
+        matcher: 'champion-bench',
+        mixin(Ember) {
+            const base = getCooldownMixin(Ember);
+            return {
+                ...base,
+                championClicked() {
+                    if (isEnabled) {
+                        this.set('benchSwapOnCooldown', false);
+                        this.set('pendingRequest', false);
+                    }
+                    if (typeof this._super === 'function') {
+                        return this._super(...arguments);
+                    }
+                }
+            };
+        }
+    });
+
+    // Hook the individual bench slots
+    Utils.Hooks.Ember.registerRule({
+        name: 'aram-nocd-bench-item-hook',
+        matcher: 'champion-bench-item',
+        mixin(Ember) {
+            const base = getCooldownMixin(Ember);
+            return {
+                ...base,
+                click() {
+                    if (isEnabled) {
+                        this.set('onCooldownFromAllySwap', false);
+                        this.set('benchSwapOnCooldown', false);
+                    }
+                    if (typeof this._super === 'function') {
+                        return this._super(...arguments);
+                    }
+                }
+            };
+        }
+    });
+
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'aramNocd',
             name: 'ARAM No Cooldown',
-            description: 'Removes the cooldown when swapping champions with the ARAM bench.',
+            description: 'Removes the cooldown when swapping champions with the ARAM bench natively.',
             settings: [
                 {
                     type: 'toggle',
@@ -126,7 +140,6 @@ export function init(context) {
             ]
         });
     } else {
-        // Native settings UI injection
         Utils.DOM.observer.observe("lol-uikit-scrollable.aram-nocd-settings", (plugin) => {
             plugin.appendChild(Utils.Settings.createToggleRow("Enable ARAM No Cooldown", isEnabled, (next) => {
                 isEnabled = next;
@@ -136,45 +149,6 @@ export function init(context) {
     }
 }
 
-function handleAramPhase(phase) {
-    if (isEnabled && phase === 'ChampSelect') {
-        startBenchObserver();
-    } else {
-        stopBenchObserver();
-    }
-}
-
-function mountAramNocd() {
-    if (!benchContainerUnsub) {
-    // SmartObserver detects when the bench container appears, then starts a scoped Utils.DOM.observer
-    benchContainerUnsub = Utils.DOM.observer.observe('.bench-container', (container) => {
-        if (!isEnabled) return;
-        startBenchObserver();
-    });
-    }
-
-    // Start/stop the scoped Utils.DOM.observer based on gameflow phase
-    if (Utils.LCU && Utils.LCU.observe && !aramPhaseUnsub) {
-        aramPhaseUnsub = Utils.LCU.observe('/lol-gameflow/v1/gameflow-phase', e => handleAramPhase(e.data));
-
-        Utils.LCU.get('/lol-gameflow/v1/gameflow-phase').then(phase => {
-            handleAramPhase(phase);
-        }).catch(() => {});
-    }
-}
-
-function unmountAramNocd() {
-    if (benchContainerUnsub) {
-        benchContainerUnsub();
-        benchContainerUnsub = null;
-    }
-    if (aramPhaseUnsub) {
-        aramPhaseUnsub();
-        aramPhaseUnsub = null;
-    }
-    stopBenchObserver();
-}
-
 export function load() {
-    if (isEnabled) mountAramNocd();
+    // Managed by the Ember rules
 }

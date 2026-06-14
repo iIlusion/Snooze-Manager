@@ -1,8 +1,8 @@
 /**
  * @name Snooze-ArenaGod
- * @version 1.0.0
+ * @version 1.0.1
  * @author SnoozeFest - github@ReformedDoge
- * @description Enhances Arena mode champion grid and progress display for faster decisions.
+ * @description Enhances Arena mode champion grid and progress display.
  * @link https://github.com/ReformedDoge
  */
 import Utils from './generalUtils.js';
@@ -15,8 +15,6 @@ const ARENA_QUEUES = [1700, 1710, 1720];
 let isEnabled = false;
 let currentArenaMode = false;
 let progressCache = null;
-let localGridObs = null;
-let gridUnsub = null;
 let progressPanel = null;
 
 const sheet = new CSSStyleSheet();
@@ -29,10 +27,10 @@ sheet.replaceSync(`
   .champion-grid.sm-arena-active .grid-champion[data-sm-status]::after {
     content: '';
     position: absolute;
-	top: 50px;
-	left: 33px;
+    top: 50px;
+    left: 33px;
     width: 32px;
-	transform: translate(25%, -25%);
+    transform: translate(25%, -25%);
     height: 36px;
     z-index: 100;
     pointer-events: none;
@@ -54,73 +52,6 @@ if (!document.adoptedStyleSheets.includes(sheet)) {
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
 }
 
-function updateTile(el) {
-    if (!progressCache || !isEnabled || !currentArenaMode) return;
-
-    const id = Number(el.getAttribute('data-id'));
-
-    // SKIP: Random (-2), Bravery (-3), None (-1) ?
-    if (!id || id <= 0) {
-        if (el.hasAttribute('data-sm-status')) el.removeAttribute('data-sm-status');
-        return;
-    }
-
-    // a champion in both sets only ever shows the trophy
-    if (progressCache.first.has(id)) {
-        el.setAttribute('data-sm-status', 'first');
-    } else if (progressCache.played.has(id)) {
-        el.setAttribute('data-sm-status', 'played');
-    } else {
-        el.removeAttribute('data-sm-status');
-    }
-}
-
-// only runs while a .champion-grid container is live.
-// Reacts to data-id attribute swaps across phases (declare -> ban -> select/lock)
-// and to child additions when the grid populates.
-function startGridMonitoring(container) {
-    if (localGridObs) localGridObs.disconnect();
-
-    container.classList.add('sm-arena-active');
-
-    localGridObs = new MutationObserver((mutations) => {
-        if (!container.classList.contains('sm-arena-active')) {
-            container.classList.add('sm-arena-active');
-        }
-        for (const m of mutations) {
-            if (m.attributeName === 'data-id') updateTile(m.target);
-            if (m.addedNodes.length) {
-                m.target.querySelectorAll?.('.grid-champion').forEach(updateTile);
-            }
-        }
-    });
-
-    localGridObs.observe(container, {
-        childList: true, subtree: true, attributes: true, attributeFilter: ['data-id', 'class']
-    });
-
-    container.querySelectorAll('.grid-champion').forEach(updateTile);
-}
-
-// Mount / unmount the SmartObserver subscription for .champion-grid.
-// gridUnsub guard prevents stacking duplicate subscriptions across re-entries.
-function mountGridObserver() {
-    if (gridUnsub) return;
-    gridUnsub = Utils.DOM.observer.observe('.champion-grid', startGridMonitoring);
-}
-
-function unmountGridObserver() {
-    if (gridUnsub) {
-        gridUnsub();
-        gridUnsub = null;
-    }
-    if (localGridObs) {
-        localGridObs.disconnect();
-        localGridObs = null;
-    }
-}
-
-// Saves final position to DataStore
 function makeDraggable(el) {
     el.addEventListener('pointerdown', (e) => {
         if (e.target.closest('#sm-arena-god-close')) return;
@@ -165,82 +96,69 @@ function updatePanelContent() {
     const remaining = Math.max(0, required - current);
 
     progressPanel.innerHTML = `
-	  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
-		<div style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:.06em;color:#c8aa6e;">
-		  Arena God
-		</div>
-
-		<div style="display:flex;align-items:center;gap:8px;">
-		  <span style="font-size:12px;color:#b7b1a1;">
-			${remaining} left
-		  </span>
-
-		  <span
-			id="sm-arena-god-close"
-			style="
-			  font-size:11px;
-			  color:#7e786d;
-			  cursor:pointer;
-			  line-height:1;
-			  padding:2px 4px;
-			  border-radius:3px;
-			  transition:background .12s ease,color .12s ease;
-			"
-			title="Close"
-		  >
-			✕
-		  </span>
-		</div>
-	  </div>
-
-	  <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:8px;">
-
-		<!-- LEFT: PRIMARY -->
-		<div>
-		  <div style="display:flex;align-items:baseline;gap:4px;">
-			<span style="font-size:18px;font-weight:700;color:#f0e6d2;">
-			  ${current}
-			</span>
-			<span style="font-size:12px;color:#b7b1a1;">
-			  / ${required} unique champions
-			</span>
-		  </div>
-
-		  <div style="font-size:11px;color:#8b8578;margin-top:2px;">
-			first place wins
-		  </div>
-		</div>
-
-		<!-- RIGHT: SECONDARY -->
-		<div style="text-align:right;">
-		  <div style="font-size:13px;font-weight:600;color:#d3c7b3;">
-			${playedCount}
-		  </div>
-		  <div style="font-size:10px;color:#6f6a63;margin-top:2px;">
-			champions played
-		  </div>
-		</div>
-
-	  </div>
-
-	  <div style="height:5px;background:#1e2328;border:1px solid #2a2218;border-radius:999px;overflow:hidden;">
-		<div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#c8aa6e,#f0e6d2);border-radius:999px;transition:width .2s ease;"></div>
-	  </div>
-	`;
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
+        <div style="font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:.06em;color:#c8aa6e;">
+          Arena God
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;color:#b7b1a1;">
+            ${remaining} left
+          </span>
+          <span
+            id="sm-arena-god-close"
+            style="
+              font-size:11px;
+              color:#7e786d;
+              cursor:pointer;
+              line-height:1;
+              padding:2px 4px;
+              border-radius:3px;
+              transition:background .12s ease,color .12s ease;
+            "
+            title="Close"
+          >
+            ✕
+          </span>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:8px;">
+        <div>
+          <div style="display:flex;align-items:baseline;gap:4px;">
+            <span style="font-size:18px;font-weight:700;color:#f0e6d2;">
+              ${current}
+            </span>
+            <span style="font-size:12px;color:#b7b1a1;">
+              / ${required} unique champions
+            </span>
+          </div>
+          <div style="font-size:11px;color:#8b8578;margin-top:2px;">
+            first place wins
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:13px;font-weight:600;color:#d3c7b3;">
+            ${playedCount}
+          </div>
+          <div style="font-size:10px;color:#6f6a63;margin-top:2px;">
+            champions played
+          </div>
+        </div>
+      </div>
+      <div style="height:5px;background:#1e2328;border:1px solid #2a2218;border-radius:999px;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#c8aa6e,#f0e6d2);border-radius:999px;transition:width .2s ease;"></div>
+      </div>
+    `;
 
     const closeBtn = progressPanel.querySelector('#sm-arena-god-close');
-
     if (closeBtn) {
         closeBtn.addEventListener('mouseenter', () => {
             closeBtn.style.background = 'rgba(255,255,255,0.06)';
             closeBtn.style.color = '#f0e6d2';
         });
-
         closeBtn.addEventListener('mouseleave', () => {
             closeBtn.style.background = 'transparent';
             closeBtn.style.color = '#7e786d';
         });
-
         closeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             progressPanel.remove();
@@ -296,17 +214,13 @@ async function handlePhaseChange(phase) {
         if (mode === 'cherry' || mode === 'arena' || ARENA_QUEUES.includes(qId)) {
             currentArenaMode = true;
             await refreshProgress();
-            mountGridObserver();
         }
     } else {
         if (currentArenaMode) {
             currentArenaMode = false;
-            unmountGridObserver();
             if (progressPanel) { progressPanel.remove(); progressPanel = null; }
-            document.querySelectorAll('.sm-arena-active').forEach(el => {
-                el.classList.remove('sm-arena-active');
-                el.querySelectorAll('[data-sm-status]').forEach(c => c.removeAttribute('data-sm-status'));
-            });
+            document.querySelectorAll('.champion-grid').forEach(el => el.classList.remove('sm-arena-active'));
+            document.querySelectorAll('.grid-champion[data-sm-status]').forEach(el => el.removeAttribute('data-sm-status'));
         }
     }
 }
@@ -333,7 +247,7 @@ export function init(context) {
         window.SnoozeManager.registerModule({
             id: 'arenaGod',
             name: 'Arena God Tracker',
-            description: 'Enhances Arena mode champion grid and progress display with status icons for champions you have played or won first place with.',
+            description: 'Enhances Arena mode champion grid and progress display natively with status icons on individual grid tiles.',
             settings: [{
                 type: 'toggle',
                 id: SETTINGS_KEY,
@@ -352,6 +266,43 @@ export function init(context) {
             }));
         });
     }
+
+    // Hook individual Arena champion grid cells directly
+    Utils.Hooks.Ember.registerRule({
+        name: 'arena-god-grid-champion-hook',
+        matcher: 'grid-champion',
+        mixin() {
+            return {
+                didRender() {
+                    this._super(...arguments);
+                    if (!isEnabled || !currentArenaMode || !this.element || !progressCache) return;
+                    
+                    const id = this.get('championConfiguration.champion.id');
+                    if (!id) return;
+                    
+                    // Ensure the parent container knows the grid is active
+                    const gridContainer = this.element.closest('.champion-grid');
+                    if (gridContainer && !gridContainer.classList.contains('sm-arena-active')) {
+                        gridContainer.classList.add('sm-arena-active');
+                    }
+                    
+                    if (progressCache.first.has(id)) {
+                        this.element.setAttribute('data-sm-status', 'first');
+                    } else if (progressCache.played.has(id)) {
+                        this.element.setAttribute('data-sm-status', 'played');
+                    } else {
+                        this.element.removeAttribute('data-sm-status');
+                    }
+                },
+                willDestroyElement() {
+                    if (this.element) {
+                        this.element.removeAttribute('data-sm-status');
+                    }
+                    this._super(...arguments);
+                }
+            };
+        }
+    });
 }
 
 export function load() {
