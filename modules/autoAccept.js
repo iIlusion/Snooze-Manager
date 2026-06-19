@@ -153,6 +153,7 @@ export function init(context) {
             extraRow.classList.add("plugins-settings-row");
             extraRow.style.marginTop = "10px";
             renderExtraSettings(extraRow, true);
+            plugin.appendChild(row);
             plugin.appendChild(extraRow);
         });
     }

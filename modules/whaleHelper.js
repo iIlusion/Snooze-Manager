@@ -1621,7 +1621,7 @@ export function init(context) {
                 {
                     type: 'toggle',
                     id: 'sm:lootDropOdds',
-                    label: 'Enable Loot Drop Odds Previewer',
+                    label: 'Enable Loot Drop Odds Previewer (Loot Page)',
                     value: isDropOddsEnabled,
                     onChange: (val) => {
                         isDropOddsEnabled = val;
@@ -1678,7 +1678,7 @@ export function init(context) {
                 } else { mountSessionObserver(); refreshAllBadges(); }
             }));
 
-            plugin.appendChild(createToggle("Enable Loot Drop Odds Previewer", isDropOddsEnabled, (val) => {
+            plugin.appendChild(createToggle("Enable Loot Drop Odds Previewer (Loot Page)", isDropOddsEnabled, (val) => {
                 isDropOddsEnabled = val; Utils.Store.set('whaleHelper', 'dropOddsEnabled', val);
             }));
 
